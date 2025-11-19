@@ -1,5 +1,0 @@
-#!/bin/sh
-# Script for updating loopia dns via api
-# created by loopiaapi
-
-[ ! -z ${ip} ] && loopiaapi ${INTERFACE} ${ip}
