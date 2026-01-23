@@ -162,7 +162,11 @@ proto_atc_setup () {
 
     local custom_at=$(uci get network.${interface}.custom_at 2>/dev/null)
 
+    mkdir -p /var/sms/rx
+
 # Boot LED
+    /usr/bin/modem_led boot 2>/dev/null
+
     [ -z "$delay" ] && delay=15
     [ ! -f /var/modem.status ] && {
         echo 'Modem boot delay '$delay's'
@@ -260,6 +264,8 @@ proto_atc_setup () {
     esac
 
 # Config LED
+    /usr/bin/modem_led config 2>/dev/null
+
 # Enable flightmode
     atOut=$(COMMAND='AT+CFUN=4' gcom -d "$device" -s /etc/gcom/run_at.gcom)
     [ "$atOut" != 'OK' ] && echo $atOut
@@ -325,6 +331,20 @@ proto_atc_setup () {
     atOut=$(COMMAND='AT+CGPIAF=1,1,0,1' gcom -d "$device" -s /etc/gcom/run_at.gcom)
     [ "$atOut" != 'OK' ] && echo $atOut
 
+# SMS config
+    atOut=$(COMMAND='AT+CMGF=0' gcom -d "$device" -s /etc/gcom/run_at.gcom)
+    [ "$atOut" != 'OK' ] && echo $atOut
+    atOut=$(COMMAND='AT+CSCS="GSM"' gcom -d "$device" -s /etc/gcom/run_at.gcom)
+    [ "$atOut" != 'OK' ] && echo $atOut
+    atOut=$(COMMAND='AT+CNMI=2,1' gcom -d "$device" -s /etc/gcom/run_at.gcom)
+    [ "$atOut" != 'OK' ] && echo $atOut
+
+#  Enable signal strength reporting
+    atOut=$(COMMAND='AT+XCESQ=1' gcom -d "$device" -s /etc/gcom/run_at.gcom)
+    [ "$atOut" != 'OK' ] && echo $atOut
+    atOut=$(COMMAND='AT+XCESQRC=1' gcom -d "$device" -s /etc/gcom/run_at.gcom)
+    [ "$atOut" != 'OK' ] && echo $atOut
+
 # Disable camped cell info
     atOut=$(COMMAND='AT+XCCINFO=0' gcom -d "$device" -s /etc/gcom/run_at.gcom)
     [ "$atOut" != 'OK' ] && echo $atOut
@@ -356,6 +376,8 @@ proto_atc_setup () {
     COMMAND='AT+CFUN=1' gcom -d "$device" -s /etc/gcom/at.gcom
 
 # Searching LED
+    /usr/bin/modem_led searching 2>/dev/null
+
     while read URCline
     do
         firstASCII=$(printf "%d" \'${URCline::1})
@@ -389,6 +411,7 @@ proto_atc_setup () {
                                     echo 'RATchange: '$rat' -> '$new_rat
                                     rat=$new_rat
 # Connected LED
+                                    /usr/bin/modem_led connected_$new_rat 2>/dev/null
                                 }
                                 [ "$atc_debug" -ge 1 ] && echo 'Cell change'$(CxREG $URCvalue)
                             else
@@ -420,6 +443,7 @@ proto_atc_setup () {
                                     echo RATchange: $rat -> $new_rat
                                     rat=$new_rat
 # Connected LED
+                                    /usr/bin/modem_led connected_$new_rat 2>/dev/null
                                 }
                                 [ "$atc_debug" -ge 1 ] && echo 'Cell change'$(CxREG $URCvalue)
                             else
@@ -456,6 +480,7 @@ proto_atc_setup () {
                         'ME PDN DEACT 0'|'NW PDN DEACT 0' )
                             echo 'Session disconnected by the network'
 # Searching LED
+                            /usr/bin/modem_led searching 2>/dev/null
                             proto_init_update "$ifname" 0
                             proto_send_update "$interface"
                             ;;
@@ -499,6 +524,7 @@ proto_atc_setup () {
                 CONNECT )
                     [ "$atc_debug" -ge 1 ] && echo $URCline
 # Connected LED
+                    /usr/bin/modem_led connected_$new_rat 2>/dev/null
                     proto_init_update "$ifname" 1
                     proto_set_keep 1
                     proto_add_data
@@ -510,8 +536,49 @@ proto_atc_setup () {
                     [ -n "$v6address" ] && update_DHCPv6
                     ;;
 
+                +XCESQI )
+                    [ "$atc_debug" -gt 1 ] && echo $URCline
+                    rssi=$(echo $URCvalue | awk -F ',' '{print $6}')
+                    [ $rssi -ne 255 ] 2>/dev/null && {
+                        rssi=$(($rssi*100/97))
+                    } || {
+                        rssi=$(echo $URCvalue | awk -F ',' '{print $3}')
+                        [ $rssi -ne 255 ] 2>/dev/null && rssi=$(($rssi*100/96)) || rssi=256
+                    }
+                    /usr/bin/modem_led rssi $rssi 2>/dev/null
+                    ;;
+
+                +CMTI )
+                    [ "$atc_debug" -ge 1 ] && echo $URCline
+                    sms_index=$(echo $URCvalue | awk -F ',' '{print $2}')
+                    COMMAND='AT+CMGR='$sms_index gcom -d "$device" -s /etc/gcom/at.gcom
+                    ;;
+
+                +CMGR )
+                    [ "$atc_debug" -ge 1 ] && echo $URCline
+                    OK_received=11
+                    ;;
+
+                +CMGS )
+                    [ "$atc_debug" -ge 1 ] && echo $URCline
+                    echo 'SMS successfully sent'
+                    ;;
+
                 OK )
                     [ "$atc_debug" -ge 1 ] && echo $URCline
+                    [ $OK_received -eq 12 ] && {
+                        /usr/bin/atc_rx_pdu_sms $sms_pdu 2> /dev/null
+                        [ $sms_index -gt 1 ] && {
+                            sms_index=$((sms_index-1))
+                            COMMAND='AT+CMGR='$sms_index gcom -d "$device" -s /etc/gcom/at.gcom
+                        } || {
+                            OK_received=0
+                        }
+                    }
+                    [ $OK_received -eq 11 ] && {
+                        COMMAND='AT+CMGD='$sms_index gcom -d "$device" -s /etc/gcom/at.gcom
+                        OK_received=12
+                    }
                     [ $OK_received -eq 3 ] && {
                         COMMAND='AT+CGDATA="M-RAW_IP",0' gcom -d "$device" -s /etc/gcom/at.gcom
                         OK_received=10
@@ -528,6 +595,11 @@ proto_atc_setup () {
 
                 * )
                     [ "$atc_debug" -ge 1 ] && echo $URCline
+                    [ $OK_received -eq 11 ] && {
+                        sms_pdu=$URCline
+                        echo 'SMS received'
+                        [ "$atc_debug" -gt 1 ] && echo $sms_pdu >> /var/sms/pdus 2> /dev/null
+                    }
                     ;;
             esac
         fi
@@ -539,6 +611,7 @@ proto_atc_teardown() {
     local interface="$1"
     local device=$(uci -q get network.$interface.device)
     echo $interface is disconnected
+    /usr/bin/modem_led off 2> /dev/null
     atOut=$(COMMAND='AT+XDATACHANNEL=0' gcom -d "$device" -s /etc/gcom/run_at.gcom)
     atOut=$(COMMAND='AT+CGDATA=0' gcom -d "$device" -s /etc/gcom/run_at.gcom)
     proto_init_update "*" 0
