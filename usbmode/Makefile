@@ -1,8 +1,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=usbmode
-PKG_RELEASE:=0.1
-PKG_VERSION:=2022-01-31
+PKG_RELEASE:=2
+PKG_VERSION:=2022.01.31
 
 # PKG_SOURCE_PROTO:=git
 # PKG_SOURCE_URL=$(PROJECT_GIT)/project/usbmode.git
