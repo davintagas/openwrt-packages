@@ -1,8 +1,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=umbim
-PKG_RELEASE:=0.1
-PKG_VERSION:=2021-08-18
+PKG_RELEASE:=2
+PKG_VERSION:=2021.08.18
 
 # PKG_SOURCE_PROTO:=git
 # PKG_SOURCE_URL=$(PROJECT_GIT)/project/umbim.git
